@@ -39,6 +39,7 @@ setup(
         'torch>=2.3',
         'transformers>=4.45.0',
         'datasets>=3.1.0',
+        'triton==3.1.0',
         'einops',
         'ninja'
     ],
