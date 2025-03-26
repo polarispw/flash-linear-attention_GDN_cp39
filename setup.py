@@ -36,9 +36,9 @@ setup(
     ],
     python_requires='>=3.7',
     install_requires=[
-        'torch>=2.5',
+        'torch>=2.3',
         'transformers>=4.45.0',
-        'datasets>=3.3.0',
+        'datasets>=3.1.0',
         'einops',
         'ninja'
     ],
