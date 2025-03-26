@@ -12,21 +12,21 @@ from fla.ops.utils.exp import safe_exp
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
 
-@triton.heuristics({
-    'NV': lambda args: triton.cdiv(args['V'], args['BV']),
-    'OUTPUT_ATTENTIONS': lambda args: args['attn'] is not None,
-    'USE_OFFSETS': lambda args: args['offsets'] is not None,
-    'USE_G': lambda args: args['g'] is not None
-})
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
-        for num_warps in [2, 4, 8, 16]
-        for num_stages in [2, 3, 4]
-    ],
-    key=["BT", "BS", "BK", "BV", "USE_G"],
-)
-@triton.jit
+# @triton.heuristics({
+#     'NV': lambda args: triton.cdiv(args['V'], args['BV']),
+#     'OUTPUT_ATTENTIONS': lambda args: args['attn'] is not None,
+#     'USE_OFFSETS': lambda args: args['offsets'] is not None,
+#     'USE_G': lambda args: args['g'] is not None
+# })
+# @triton.autotune(
+#     configs=[
+#         triton.Config({}, num_warps=num_warps, num_stages=num_stages)
+#         for num_warps in [2, 4, 8, 16]
+#         for num_stages in [2, 3, 4]
+#     ],
+#     key=["BT", "BS", "BK", "BV", "USE_G"],
+# )
+# @triton.jit
 def parallel_simple_gla_fwd_kernel(
     q,
     k,
@@ -147,6 +147,28 @@ def parallel_simple_gla_fwd_kernel(
             b_o += tl.dot(b_s.to(b_v.dtype), b_v)
     p_o = tl.make_block_ptr(o, (T, V), (stride_vo, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
     tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+
+
+# 1. 应用@triton.jit装饰器（显式调用）
+parallel_simple_gla_fwd_kernel = triton.jit(parallel_simple_gla_fwd_kernel)
+
+# 2. 应用@triton.autotune（必须在heuristics之前）
+parallel_simple_gla_fwd_kernel = triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=num_warps, num_stages=num_stages)
+        for num_warps in [2, 4, 8, 16]
+        for num_stages in [2, 3, 4]
+    ],
+    key=["BT", "BS", "BK", "BV", "USE_G"],
+)(parallel_simple_gla_fwd_kernel)
+
+# 3. 最后应用@triton.heuristics
+parallel_simple_gla_fwd_kernel = triton.heuristics({
+    'NV': lambda args: triton.cdiv(args['V'], args['BV']),
+    'OUTPUT_ATTENTIONS': lambda args: args['attn'] is not None,
+    'USE_OFFSETS': lambda args: args['offsets'] is not None,
+    'USE_G': lambda args: args['g'] is not None
+})(parallel_simple_gla_fwd_kernel)  # type: ignore[assignment]
 
 
 @triton.jit(do_not_specialize=['T'])
@@ -350,19 +372,19 @@ def parallel_simple_gla_bwd_kernel_dkv(
         tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0,))
 
 
-@triton.heuristics({
-    'NV': lambda args: triton.cdiv(args['V'], args['BV']),
-    'USE_OFFSETS': lambda args: args['offsets'] is not None,
-    'USE_G': lambda args: args['g'] is not None
-})
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=num_warps)
-        for num_warps in [2, 4, 8, 16]
-    ],
-    key=['BT', 'BS', 'BK', 'BV', 'USE_G'],
-)
-@triton.jit(do_not_specialize=['T'])
+# @triton.heuristics({
+#     'NV': lambda args: triton.cdiv(args['V'], args['BV']),
+#     'USE_OFFSETS': lambda args: args['offsets'] is not None,
+#     'USE_G': lambda args: args['g'] is not None
+# })
+# @triton.autotune(
+#     configs=[
+#         triton.Config({}, num_warps=num_warps)
+#         for num_warps in [2, 4, 8, 16]
+#     ],
+#     key=['BT', 'BS', 'BK', 'BV', 'USE_G'],
+# )
+# @triton.jit(do_not_specialize=['T'])
 def parallel_simple_gla_bwd_kernel(
     q,
     k,
@@ -471,6 +493,29 @@ def parallel_simple_gla_bwd_kernel(
         BV=BV,
         USE_G=USE_G
     )
+
+
+# 1. 应用@triton.jit装饰器（显式调用，带do_not_specialize参数）
+parallel_simple_gla_bwd_kernel = triton.jit(
+    parallel_simple_gla_bwd_kernel,
+    do_not_specialize=['T']  # 保持与装饰器相同的特化控制
+)
+
+# 2. 应用@triton.autotune（必须在heuristics之前）
+parallel_simple_gla_bwd_kernel = triton.autotune(
+    configs=[
+        triton.Config({}, num_warps=num_warps)
+        for num_warps in [2, 4, 8, 16]
+    ],
+    key=['BT', 'BS', 'BK', 'BV', 'USE_G'],
+)(parallel_simple_gla_bwd_kernel)
+
+# 3. 最后应用@triton.heuristics
+parallel_simple_gla_bwd_kernel = triton.heuristics({
+    'NV': lambda args: triton.cdiv(args['V'], args['BV']),
+    'USE_OFFSETS': lambda args: args['offsets'] is not None,
+    'USE_G': lambda args: args['g'] is not None
+})(parallel_simple_gla_bwd_kernel)  # type: ignore[assignment]
 
 
 def parallel_simple_gla_fwd(
